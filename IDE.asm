@@ -2,7 +2,7 @@
 ; UltimateOS IDE PIO Stream Driver (FASM)
 ; ============================================
 
-format ELF32      ; 32-bit code
+format bin      ; 32-bit code
 bits 32
 
 section '.bss' align 4
