@@ -1,148 +1,168 @@
-; ============================================
-; UltimateOS IDE PIO Stream Driver (FASM)
+format bin
 
+; =======================================================
+; UltimateOS IDE Driver - Ultra-Fast Multi-Sector Streaming
+; =======================================================
 
-section '.bss' align 4
-RAX         rb 8*1          ; 64-bit LBA storage
-RXX         rb 8*1          ; temporary 64-bit
-Buffer      rw 2048          ; 2048 words = 4096 bytes
-SectorCount rb 1
-Operation   rb 1             ; 0=WRITE, 1=READ
+IDE_DATA        equ 0x1F0
+IDE_ERROR       equ 0x1F1
+IDE_FEATURES    equ 0x1F1
+IDE_SECCOUNT    equ 0x1F2
+IDE_LBA_LOW     equ 0x1F3
+IDE_LBA_MID     equ 0x1F4
+IDE_LBA_HIGH    equ 0x1F5
+IDE_DRIVE       equ 0x1F6
+IDE_STATUS      equ 0x1F7
+IDE_COMMAND     equ 0x1F7
+IDE_ALTSTATUS   equ 0x3F6
+IDE_CONTROL     equ 0x3F6
 
-section '.text' align 4
-global IDE_PIO_STREAM_FINAL
+BSY equ 0x80
+RDY equ 0x40
+DRQ equ 0x08
+ERR equ 0x01
 
-IDE_PIO_STREAM_FINAL:
+CMD_READ_STREAM_EXT   equ 0x2F
+CMD_WRITE_STREAM_EXT  equ 0xCF
 
-    cmp [Operation], 0
-    je write_stream
-    cmp [Operation], 1
-    je read_stream
+; -----------------------
+; Reserved memory
+; -----------------------
+align 4
+IDE_buffer      rb 16384       ; 16KB buffer for multi-sector transfers
+
+; -----------------------
+; Wait for BSY=0 and DRQ=1
+; -----------------------
+wait_ready:
+    in al, IDE_STATUS
+    test al, BSY
+    jnz wait_ready
+    in al, IDE_STATUS
+    test al, DRQ
+    jz wait_ready
     ret
 
-; ================= WRITE STREAM ==================
-write_stream:
-    call setup_LBA48
-    mov dx, 0x1F7
-    mov al, 0xEA           ; WRITE STREAM EXT
-    out dx, al
+; =======================================================
+; IDE Ultra-Fast Multi-Sector Dispatcher
+; Input:
+;   AH = 0 -> write
+;   AH = 1 -> read
+;   EBX = starting LBA (low 32 bits)
+;   ECX = total number of sectors to transfer
+; Notes:
+;   - Transfers up to 32 sectors at a time (buffer = 16KB)
+;   - Automatically loops for large transfers
+; =======================================================
+ide_multi_sector:
+    push ebp
+    mov ebp, esp
 
-    mov esi, Buffer
-    mov cl, [SectorCount]
+    mov esi, IDE_buffer       ; buffer pointer
+.next_chunk:
+    cmp ecx, 32
+    jle .last_chunk
+    mov edx, 32               ; transfer 32 sectors this chunk
+    sub ecx, 32
+    jmp .do_transfer
+.last_chunk:
+    mov edx, ecx
+    xor ecx, ecx
+.do_transfer:
+    ; Set features = 0
+    xor al, al
+    out IDE_FEATURES, al
 
-write_sector_loop:
-    call wait_DRQ
-    mov dx, 0x1F0
-    mov bx, 256             ; words per sector
-
-write_word_loop:
-    lodsw                   ; load word from DS:SI -> AX
-    out dx, ax
-    dec bx
-    jnz write_word_loop
-
-    dec cl
-    jnz write_sector_loop
-    ret
-
-; ================= READ STREAM ===================
-read_stream:
-    call setup_LBA48
-    mov dx, 0x1F7
-    mov al, 0x25           ; READ STREAM EXT
-    out dx, al
-
-    mov edi, Buffer
-    mov cl, [SectorCount]
-
-read_sector_loop:
-    call wait_DRQ
-    mov dx, 0x1F0
-    mov bx, 256
-
-read_word_loop:
-    in ax, dx
-    stosw                   ; store AX -> ES:DI
-    dec bx
-    jnz read_word_loop
-
-    dec cl
-    jnz read_sector_loop
-    ret
-
-; ================= 48-BIT LBA ===================
-setup_LBA48:
-    mov eax, dword [RAX]        ; low 32 bits
-    mov edx, dword [RAX+4]      ; high 32 bits
-
-    ; sector count
-    mov dx, 0x1F2
-    mov al, [SectorCount]
-    out dx, al
-
-    ; LBA low/mid/high
-    mov dx, 0x1F3
-    mov al, al
-    out dx, al
-    mov dx, 0x1F4
-    mov al, ah
-    out dx, al
-    mov dx, 0x1F5
+    ; Set sector count (lower and upper)
     mov al, dl
-    out dx, al
+    out IDE_SECCOUNT, al
+    xor al, al
+    out IDE_SECCOUNT+1, al
 
-    ; LBA high/mid/high (next 24 bits)
-    mov dx, 0x1F2
-    mov al, dh
-    out dx, al
-    shr edx, 8
-    mov dx, 0x1F3
-    mov al, dh
-    out dx, al
-    shr edx, 8
-    mov dx, 0x1F4
-    mov al, dh
-    out dx, al
-    shr edx, 8
-    mov dx, 0x1F5
-    mov al, dh
-    out dx, al
+    ; LBA split
+    mov eax, ebx
+    mov al, al
+    out IDE_LBA_LOW, al
+    mov al, ah
+    out IDE_LBA_LOW+1, al
+    shr ebx, 16
+    mov al, bl
+    out IDE_LBA_MID, al
+    mov al, bh
+    out IDE_LBA_MID+1, al
+    shr ebx, 16
+    mov al, bl
+    out IDE_LBA_HIGH, al
+    mov al, bh
+    out IDE_LBA_HIGH+1, al
 
-    ; master + LBA mode
-    mov dx, 0x1F6
-    mov al, 0x40
-    out dx, al
+    ; Drive select
+    mov al, 0x40             ; master LBA
+    out IDE_DRIVE, al
+
+    ; Send command based on AH
+    cmp ah, 0
+    je .write_cmd
+    cmp ah, 1
+    je .read_cmd
+    jmp .halt
+.read_cmd:
+    mov al, CMD_READ_STREAM_EXT
+    out IDE_COMMAND, al
+    jmp .transfer_loop
+.write_cmd:
+    mov al, CMD_WRITE_STREAM_EXT
+    out IDE_COMMAND, al
+
+.transfer_loop:
+    mov ecx, edx              ; number of sectors in this chunk
+    mov edi, esi              ; buffer pointer
+.loop_sectors:
+    call wait_ready
+    mov ebp, 256              ; words per sector
+.word_loop:
+    cmp ah, 1                 ; read?
+    je .read_word
+    mov ax, [edi]
+    out IDE_DATA, ax
+    jmp .next_word
+.read_word:
+    in ax, IDE_DATA
+    mov [edi], ax
+.next_word:
+    add edi, 2
+    dec ebp
+    jnz .word_loop
+    dec ecx
+    jnz .loop_sectors
+
+    add esi, edx*512          ; move buffer pointer for next chunk
+    add ebx, edx              ; next LBA
+    cmp ecx, 0
+    je .done_chunk
+    jmp .next_chunk
+.done_chunk:
+    pop ebp
     ret
 
-; ================= STATUS WAIT ===================
-wait_DRQ:
-    mov dx, 0x1F7
+.halt:
+    hlt
+    jmp .halt
 
-.wait_bsy:
-    in al, dx
-    call wait_420ns
-    test al, 0x80          ; BSY
-    jnz .wait_bsy
+; =======================================================
+; Example usage: read 64 sectors starting at LBA 0
+; =======================================================
+start_driver:
+    mov ebx, 0          ; LBA 0
+    mov ecx, 64         ; total sectors
+    mov ah, 1           ; 1 = read
+    call ide_multi_sector
 
-.wait_drq:
-    in al, dx
-    call wait_420ns
-    test al, 0x08          ; DRQ
-    jnz .ready
-    test al, 0x01          ; ERR
-    jnz .error
-    jmp .wait_drq
+    mov ebx, 0
+    mov ecx, 64
+    mov ah, 0           ; 0 = write
+    call ide_multi_sector
 
-.ready:
-    ret
-.error:
-    ret
-
-; ================= 420ns DELAY ===================
-wait_420ns:
-    mov dx, 0x1F7
-    in al, dx
-    in al, dx
-    in al, dx
-    in al, dx
-    ret
+.halt_loop:
+    hlt
+    jmp .halt_loop
