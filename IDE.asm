@@ -1,7 +1,6 @@
 ; ============================================
 ; UltimateOS IDE PIO Stream Driver (FASM)
 
-bits 32
 
 section '.bss' align 4
 RAX         rb 8*1          ; 64-bit LBA storage
