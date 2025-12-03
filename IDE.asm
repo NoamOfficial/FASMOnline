@@ -1,4 +1,4 @@
-format bin
+
 
 ; =======================================================
 ; UltimateOS IDE Driver - Ultra-Fast Multi-Sector Streaming
