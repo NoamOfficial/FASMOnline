@@ -1,0 +1,39 @@
+name: Build FASM
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Download FASM
+      run: |
+        mkdir fasm
+        curl -L https://flatassembler.net/fasm-1.73.30.tgz -o fasm.tgz
+        tar -xzf fasm.tgz -C fasm --strip-components=1
+        chmod +x fasm/fasm
+
+    - name: Build all ASM files
+      run: |
+        mkdir -p out
+        for f in $(find . -name "*.asm"); do
+          base=$(basename "$f" .asm)
+          echo "Assembling $f -> out/$base.bin"
+          ./fasm/fasm "$f" "out/$base.bin"
+        done
+
+    - name: Upload binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: fasm-binaries
+        path: out/
+
