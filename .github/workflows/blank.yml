@@ -1,4 +1,4 @@
-name: Build FASM
+name: Build FASM ASM
 
 on:
   push:
@@ -22,10 +22,10 @@ jobs:
         tar -xzf fasm.tgz -C fasm --strip-components=1
         chmod +x fasm/fasm
 
-    - name: Build all ASM files
+    - name: Build all ASM files in root
       run: |
         mkdir -p out
-        for f in $(find . -name "*.asm"); do
+        for f in $(find . -maxdepth 1 -name "*.asm"); do
           base=$(basename "$f" .asm)
           echo "Assembling $f -> out/$base.bin"
           ./fasm/fasm "$f" "out/$base.bin"
