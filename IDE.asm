@@ -1,9 +1,6 @@
 
-
 ; =======================================================
-; UltimateOS IDE Driver - Ultra-Fast Multi-Sector Streaming
-; =======================================================
-
+use32
 IDE_DATA        equ 0x1F0
 IDE_ERROR       equ 0x1F1
 IDE_FEATURES    equ 0x1F1
@@ -25,11 +22,12 @@ ERR equ 0x01
 CMD_READ_STREAM_EXT   equ 0x2F
 CMD_WRITE_STREAM_EXT  equ 0xCF
 
-; -----------------------
-; Reserved memory
-; -----------------------
+section .bss
 align 4
-IDE_buffer      rb 16384       ; 16KB buffer for multi-sector transfers
+IDE_buffer      resb 16384       ; buffer (16KB, can adjust size)
+
+section .text
+global ide_multi_sector
 
 ; -----------------------
 ; Wait for BSY=0 and DRQ=1
@@ -48,32 +46,37 @@ wait_ready:
 ; Input:
 ;   AH = 0 -> write
 ;   AH = 1 -> read
-;   EBX = starting LBA (low 32 bits)
-;   ECX = total number of sectors to transfer
-; Notes:
-;   - Transfers up to 32 sectors at a time (buffer = 16KB)
-;   - Automatically loops for large transfers
+;   EBX = starting LBA
+;   ECX = total sectors
+; Output:
+;   IDE_buffer contains read sectors / writes buffer
 ; =======================================================
 ide_multi_sector:
     push ebp
     mov ebp, esp
 
-    mov esi, IDE_buffer       ; buffer pointer
+    mov esi, IDE_buffer
+
+    ; calculate max sectors per chunk based on buffer
+    mov eax, IDE_buffer
+    add eax, 16384
+    sub eax, esi
+    shr eax, 9       ; divide by 512 bytes per sector
+    mov edx, eax
+
 .next_chunk:
-    cmp ecx, 32
+    cmp ecx, edx
     jle .last_chunk
-    mov edx, 32               ; transfer 32 sectors this chunk
-    sub ecx, 32
+    sub ecx, edx
     jmp .do_transfer
 .last_chunk:
     mov edx, ecx
     xor ecx, ecx
 .do_transfer:
-    ; Set features = 0
     xor al, al
     out IDE_FEATURES, al
 
-    ; Set sector count (lower and upper)
+    ; sector count
     mov al, dl
     out IDE_SECCOUNT, al
     xor al, al
@@ -96,11 +99,10 @@ ide_multi_sector:
     mov al, bh
     out IDE_LBA_HIGH+1, al
 
-    ; Drive select
-    mov al, 0x40             ; master LBA
+    mov al, 0x40
     out IDE_DRIVE, al
 
-    ; Send command based on AH
+    ; Command
     cmp ah, 0
     je .write_cmd
     cmp ah, 1
@@ -115,13 +117,13 @@ ide_multi_sector:
     out IDE_COMMAND, al
 
 .transfer_loop:
-    mov ecx, edx              ; number of sectors in this chunk
-    mov edi, esi              ; buffer pointer
+    mov ecx, edx
+    mov edi, esi
 .loop_sectors:
     call wait_ready
-    mov ebp, 256              ; words per sector
+    mov ebp, 256
 .word_loop:
-    cmp ah, 1                 ; read?
+    cmp ah, 1
     je .read_word
     mov ax, [edi]
     out IDE_DATA, ax
@@ -136,8 +138,8 @@ ide_multi_sector:
     dec ecx
     jnz .loop_sectors
 
-    add esi, edx*512          ; move buffer pointer for next chunk
-    add ebx, edx              ; next LBA
+    lea esi, [esi + edx*512]
+    add ebx, edx
     cmp ecx, 0
     je .done_chunk
     jmp .next_chunk
@@ -148,21 +150,3 @@ ide_multi_sector:
 .halt:
     hlt
     jmp .halt
-
-; =======================================================
-; Example usage: read 64 sectors starting at LBA 0
-; =======================================================
-start_driver:
-    mov ebx, 0          ; LBA 0
-    mov ecx, 64         ; total sectors
-    mov ah, 1           ; 1 = read
-    call ide_multi_sector
-
-    mov ebx, 0
-    mov ecx, 64
-    mov ah, 0           ; 0 = write
-    call ide_multi_sector
-
-.halt_loop:
-    hlt
-    jmp .halt_loop
