@@ -25,7 +25,6 @@ ERR equ 0x01
 CMD_READ_STREAM_EXT   equ 0x2F
 CMD_WRITE_STREAM_EXT  equ 0xCF
 
-section .text
 global ide_multi_sector
 
 ; -----------------------
