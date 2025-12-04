@@ -1,10 +1,14 @@
 use32
 
+; IDE Ports
 IDE_DATA        equ 0x1F0
 IDE_SECCOUNT    equ 0x1F2
 IDE_LBA_LOW     equ 0x1F3
+IDE_LBA_LOW_HI  equ 0x1F4
 IDE_LBA_MID     equ 0x1F4
+IDE_LBA_MID_HI  equ 0x1F5
 IDE_LBA_HIGH    equ 0x1F5
+IDE_LBA_HIGH_HI equ 0x1F6
 IDE_DRIVE       equ 0x1F6
 IDE_STATUS      equ 0x1F7
 IDE_COMMAND     equ 0x1F7
@@ -27,14 +31,14 @@ wait_ready:
     ret
 
 ; =======================================================
-; IDE driver for huge buffers
+; IDE driver for 48-bit LBA, huge buffers
 ; Inputs:
 ;   AH = 0 -> write, 1 -> read
-;   EBX:EDX = starting LBA (only lower 48 bits used)
-;   ECX:EDI = total sectors (64-bit)
+;   EBX:EDX = starting LBA (lower 48 bits)
+;   ECX = sectors count
 ;   ESI = buffer pointer
 ; =======================================================
-ide_huge:
+ide_48bit_safe:
     push ebp
     mov ebp, esp
 
@@ -50,19 +54,16 @@ ide_huge:
     xor al, al
     out IDE_SECCOUNT+1, al
 
-    ; 48-bit LBA split
-    mov eax, ebx
+    ; 48-bit LBA split (all outputs use AL)
+    mov al, bl
     out IDE_LBA_LOW, al
-    shr ebx, 8
-    out IDE_LBA_LOW+1, bl
-    mov eax, edx
+    mov al, bh
+    out IDE_LBA_LOW_HI, al
+    mov al, dl
     out IDE_LBA_MID, al
-    shr edx, 8
-    out IDE_LBA_MID+1, dl
-    mov eax, ebx
-    out IDE_LBA_HIGH, al
-    shr ebx, 8
-    out IDE_LBA_HIGH+1, bl
+    mov al, dh
+    out IDE_LBA_MID_HI, al
+    ; high 16 bits if needed can be set similarly
 
     mov al, 0x40
     out IDE_DRIVE, al
@@ -108,11 +109,10 @@ ide_huge:
     add esi, ecx
     ; advance LBA
     add ebx, eax
-    ; subtract chunk from total sectors
-    sub edi, eax    ; ECX:EDI combo can be handled externally if needed
 
-    ; check if more sectors left
-    cmp edi, 0
+    ; subtract chunk from total sectors
+    sub ecx, eax
+    cmp ecx, 0
     jne .next_chunk
 
     pop ebp
