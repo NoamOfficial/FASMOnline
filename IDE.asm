@@ -1,12 +1,6 @@
-; =======================================================
-; UltimateOS IDE Driver - Fast Multi-Sector Streaming (use32, no .bss)
-; =======================================================
-
 use32
 
 IDE_DATA        equ 0x1F0
-IDE_ERROR       equ 0x1F1
-IDE_FEATURES    equ 0x1F1
 IDE_SECCOUNT    equ 0x1F2
 IDE_LBA_LOW     equ 0x1F3
 IDE_LBA_MID     equ 0x1F4
@@ -14,21 +8,14 @@ IDE_LBA_HIGH    equ 0x1F5
 IDE_DRIVE       equ 0x1F6
 IDE_STATUS      equ 0x1F7
 IDE_COMMAND     equ 0x1F7
-IDE_ALTSTATUS   equ 0x3F6
 IDE_CONTROL     equ 0x3F6
 
 BSY equ 0x80
-RDY equ 0x40
 DRQ equ 0x08
-ERR equ 0x01
 
-CMD_READ_STREAM_EXT   equ 0x2F
-CMD_WRITE_STREAM_EXT  equ 0xCF
+CMD_READ_STREAM_EXT_48   equ 0x24F
+CMD_WRITE_STREAM_EXT_48  equ 0x2CF
 
-
-
-; -----------------------
-; Wait for BSY=0 and DRQ=1
 ; -----------------------
 wait_ready:
     in al, IDE_STATUS
@@ -40,102 +27,93 @@ wait_ready:
     ret
 
 ; =======================================================
-; IDE Ultra-Fast Multi-Sector Dispatcher
-; Input:
-;   AH = 0 -> write
-;   AH = 1 -> read
-;   EBX = starting LBA
-;   ECX = total sectors
-;   ESI = pointer to buffer
-; Output:
-;   buffer contains read sectors / writes buffer
+; IDE driver for huge buffers
+; Inputs:
+;   AH = 0 -> write, 1 -> read
+;   EBX:EDX = starting LBA (only lower 48 bits used)
+;   ECX:EDI = total sectors (64-bit)
+;   ESI = buffer pointer
 ; =======================================================
-ide_multi_sector:
+ide_huge:
     push ebp
     mov ebp, esp
 
 .next_chunk:
-    ; calculate sectors for this chunk (max 32 for example)
-    mov edx, ecx
-    cmp edx, 32
-    jle .chunk_ready
-    mov edx, 32
-.chunk_ready:
-    sub ecx, edx
-
-    xor al, al
-    out IDE_FEATURES, al
-
-    ; sector count
-    mov al, dl
+    ; calculate chunk size (max 256 sectors per command)
+    mov eax, ecx
+    cmp eax, 256
+    jle .set_chunk
+    mov eax, 256
+.set_chunk:
+    mov al, al
     out IDE_SECCOUNT, al
     xor al, al
     out IDE_SECCOUNT+1, al
 
-    ; LBA split
+    ; 48-bit LBA split
     mov eax, ebx
-    mov al, al
     out IDE_LBA_LOW, al
-    mov al, ah
-    out IDE_LBA_LOW+1, al
-    shr ebx, 16
-    mov al, bl
+    shr ebx, 8
+    out IDE_LBA_LOW+1, bl
+    mov eax, edx
     out IDE_LBA_MID, al
-    mov al, bh
-    out IDE_LBA_MID+1, al
-    shr ebx, 16
-    mov al, bl
+    shr edx, 8
+    out IDE_LBA_MID+1, dl
+    mov eax, ebx
     out IDE_LBA_HIGH, al
-    mov al, bh
-    out IDE_LBA_HIGH+1, al
+    shr ebx, 8
+    out IDE_LBA_HIGH+1, bl
 
     mov al, 0x40
     out IDE_DRIVE, al
 
-    ; Command
+    ; command
     cmp ah, 0
-    je .write_cmd
+    je .write
     cmp ah, 1
-    je .read_cmd
-    jmp .halt
-.read_cmd:
-    mov al, CMD_READ_STREAM_EXT
+    je .read
+.read:
+    mov al, CMD_READ_STREAM_EXT_48
     out IDE_COMMAND, al
-    jmp .transfer_loop
-.write_cmd:
-    mov al, CMD_WRITE_STREAM_EXT
+    jmp .transfer
+.write:
+    mov al, CMD_WRITE_STREAM_EXT_48
     out IDE_COMMAND, al
 
-.transfer_loop:
-    mov ecx, edx
+.transfer:
+    mov ecx, eax      ; sectors in this chunk
     mov edi, esi
-.loop_sectors:
+.next_sector:
     call wait_ready
     mov ebp, 256
-.word_loop:
+.next_word:
     cmp ah, 1
-    je .read_word
+    je .rd
     mov ax, [edi]
     out IDE_DATA, ax
-    jmp .next_word
-.read_word:
+    jmp .nw
+.rd:
     in ax, IDE_DATA
     mov [edi], ax
-.next_word:
+.nw:
     add edi, 2
     dec ebp
-    jnz .word_loop
+    jnz .next_word
     dec ecx
-    jnz .loop_sectors
+    jnz .next_sector
 
-    lea esi, [esi + edx*512]
-    add ebx, edx
+    ; safe buffer pointer increment
+    mov ecx, eax
+    shl ecx, 9      ; multiply by 512 bytes
+    add esi, ecx
+    ; advance LBA
+    add ebx, eax
+    ; subtract chunk from total sectors
+    sub edi, eax    ; ECX:EDI combo can be handled externally if needed
 
-    cmp ecx, 0
+    ; check if more sectors left
+    cmp edi, 0
     jne .next_chunk
 
     pop ebp
-    ret
-
-.halt:
     ret
