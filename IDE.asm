@@ -1,6 +1,9 @@
-
 ; =======================================================
+; UltimateOS IDE Driver - Fast Multi-Sector Streaming (use32, no .bss)
+; =======================================================
+
 use32
+
 IDE_DATA        equ 0x1F0
 IDE_ERROR       equ 0x1F1
 IDE_FEATURES    equ 0x1F1
@@ -21,10 +24,6 @@ ERR equ 0x01
 
 CMD_READ_STREAM_EXT   equ 0x2F
 CMD_WRITE_STREAM_EXT  equ 0xCF
-
-section .bss
-align 4
-IDE_buffer      resb 16384       ; buffer (16KB, can adjust size)
 
 section .text
 global ide_multi_sector
@@ -48,31 +47,23 @@ wait_ready:
 ;   AH = 1 -> read
 ;   EBX = starting LBA
 ;   ECX = total sectors
+;   ESI = pointer to buffer
 ; Output:
-;   IDE_buffer contains read sectors / writes buffer
+;   buffer contains read sectors / writes buffer
 ; =======================================================
 ide_multi_sector:
     push ebp
     mov ebp, esp
 
-    mov esi, IDE_buffer
-
-    ; calculate max sectors per chunk based on buffer
-    mov eax, IDE_buffer
-    add eax, 16384
-    sub eax, esi
-    shr eax, 9       ; divide by 512 bytes per sector
-    mov edx, eax
-
 .next_chunk:
-    cmp ecx, edx
-    jle .last_chunk
-    sub ecx, edx
-    jmp .do_transfer
-.last_chunk:
+    ; calculate sectors for this chunk (max 32 for example)
     mov edx, ecx
-    xor ecx, ecx
-.do_transfer:
+    cmp edx, 32
+    jle .chunk_ready
+    mov edx, 32
+.chunk_ready:
+    sub ecx, edx
+
     xor al, al
     out IDE_FEATURES, al
 
@@ -140,13 +131,12 @@ ide_multi_sector:
 
     lea esi, [esi + edx*512]
     add ebx, edx
+
     cmp ecx, 0
-    je .done_chunk
-    jmp .next_chunk
-.done_chunk:
+    jne .next_chunk
+
     pop ebp
     ret
 
 .halt:
-    hlt
-    jmp .halt
+    ret
