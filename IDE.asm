@@ -36,7 +36,7 @@ wait_ready:
 ide_48bit_safe:
     push ebp
     mov ebp, esp
-    mov ecx_total, ecx
+    mov [ecx_total], ecx
 
 .next_chunk:
     ; ---- chunk size = min(ECX_total, 256) ----
@@ -122,6 +122,6 @@ ide_48bit_safe:
     ret
 
 ; ---- data section ----
-section .bss
+section .'bss' align 4
 esi_chunk    resd 1
 ecx_total    resd 1
