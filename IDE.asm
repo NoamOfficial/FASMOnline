@@ -45,7 +45,7 @@ ide_48bit_safe:
     jle .set_chunk
     mov eax, 256
 .set_chunk:
-    mov esi_chunk, eax        ; save chunk size
+    mov [esi_chunk], eax        ; save chunk size
 
     ; ---- sector count (2 bytes) ----
     mov al, ah
