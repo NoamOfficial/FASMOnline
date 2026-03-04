@@ -19,7 +19,7 @@ CMD_READ_STREAM_EXT_48   equ 0x24
 CMD_WRITE_STREAM_EXT_48  equ 0x34
 
 ; ------------------------------
-section '.bss' align 4
+section .bss align 4
 ecx_total   resd 1      ; total sectors remaining
 esi_chunk   resd 1      ; chunk size per command
 
